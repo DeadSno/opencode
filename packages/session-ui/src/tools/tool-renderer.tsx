@@ -256,6 +256,7 @@ export function displayDirectory(path: string | undefined) {
 import { resolveFileDiff } from "../components/session-diff"
 import { factsOf, summarize } from "../timeline/facts"
 import { contextGroupLabel, webSearchProviderLabel } from "./context-group-label"
+import type { FileFact } from "../timeline/facts"
 
 export function taskAgentName(raw: string | undefined, list?: readonly { name: string }[]) {
   if (!raw) return undefined
@@ -370,6 +371,7 @@ export type ContextGroupPart =
   | SessionMessageAssistantTool
   | (SessionMessageAssistantReasoning & { id: string; streaming?: boolean })
   | { type: "notice" | "shell" | "text"; id: string; render: () => JSX.Element }
+  | { type: "file"; id: string; file: FileFact; render: () => JSX.Element }
 
 export function CurrentContextToolGroup(props: {
   parts: ContextGroupPart[]
@@ -581,7 +583,7 @@ export function CurrentContextToolGroup(props: {
                 const value = item()
 
                 return !Array.isArray(value) &&
-                  (value.type === "notice" || value.type === "shell" || value.type === "text")
+                  (value.type === "notice" || value.type === "shell" || value.type === "text" || value.type === "file")
                   ? value
                   : undefined
               })
@@ -901,6 +903,8 @@ export function CurrentReadToolGroup(props: {
 
 export function CurrentFileToolGroup(props: {
   tools: SessionMessageAssistantTool[]
+  /** Files a script changed, shown like the files a call changed. */
+  files?: readonly FileFact[]
   fileOpen?: (path: string) => boolean | undefined
   onFileOpenChange?: (path: string, open: boolean) => void
   onSizeChange?: () => void
@@ -963,9 +967,10 @@ export function CurrentFileToolGroup(props: {
       ]
     })
 
+    next.push(...scriptFileDiffs(props.files ?? []))
     const updates = new Map(next.map((entry) => [entry.key, entry.value]))
     const existing = new Set(previous.map((entry) => entry.key))
-    const owners = new Set(props.tools.map((tool) => tool.id))
+    const owners = new Set([...props.tools.map((tool) => tool.id), ...(props.files ?? []).map((file) => file.by)])
 
     const result = [
       ...previous.flatMap((entry) => {
@@ -1006,19 +1011,59 @@ export function CurrentFileToolGroup(props: {
       data-timeline-part-id={props.tools.length === 1 ? props.tools[0]?.id : undefined}
       data-timeline-part-ids={props.tools.length > 1 ? props.tools.map((tool) => tool.id).join(",") : undefined}
     >
-      <Dynamic
-        component={render}
-        tool={tool()}
-        input={{}}
-        metadata={metadata()}
-        status={pending() ? "running" : "completed"}
-        fileOpen={props.fileOpen}
-        onFileOpenChange={props.onFileOpenChange}
-        deferContent
-        virtualizeDiff={false}
-        onContentRendered={props.onSizeChange}
-      />
+      <Show when={files().length > 0 || props.tools.length > 0}>
+        <Dynamic
+          component={render}
+          tool={tool()}
+          input={{}}
+          metadata={metadata()}
+          status={pending() ? "running" : "completed"}
+          fileOpen={props.fileOpen}
+          onFileOpenChange={props.onFileOpenChange}
+          deferContent
+          virtualizeDiff={false}
+          onContentRendered={props.onSizeChange}
+        />
+      </Show>
+      <FileCounts files={props.files ?? []} />
     </div>
+  )
+}
+
+/** A script's changed files that carry a diff, keyed by the script and path so their cards keep their place. */
+export function scriptFileDiffs(files: readonly FileFact[]) {
+  return files.flatMap((file) => {
+    const value = {
+      file: file.path,
+      patch: file.patch,
+      additions: file.additions ?? 0,
+      deletions: file.deletions ?? 0,
+      status: file.change ?? "modified",
+    }
+
+    return changedFileDiff(value) ? [{ key: file.id, toolID: file.by, value }] : []
+  })
+}
+
+/** Files a script changed without a diff to show, past the size cap or binary: each with its counts. */
+export function FileCounts(props: { files: readonly FileFact[] }) {
+  const counted = createMemo(() =>
+    props.files.filter((file) => file.patch === undefined && (file.additions ?? 0) + (file.deletions ?? 0) > 0),
+  )
+
+  return (
+    <For each={counted()}>
+      {(file) => (
+        <div data-component="file-counts" data-type={file.change} data-timeline-part-id={file.id}>
+          <FileIcon node={{ path: file.path, type: "file" }} />
+          <span data-slot="file-counts-name">{file.path}</span>
+          <DiffChanges
+            appearance="standard"
+            changes={{ additions: file.additions ?? 0, deletions: file.deletions ?? 0 }}
+          />
+        </div>
+      )}
+    </For>
   )
 }
 

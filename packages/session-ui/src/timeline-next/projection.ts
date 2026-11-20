@@ -24,7 +24,7 @@ import {
 } from "../timeline/turn-phase-machine"
 import { errorInfo } from "./errors"
 import { factsOf } from "../timeline/facts"
-import { hidesActivity, placeContent, placeItems, placeNotice } from "../timeline/place"
+import { hidesActivity, placeContent, placeItems, placeNotice, scriptFileItems } from "../timeline/place"
 import { noticeEvent, workKey, type TimelineEvent } from "./events"
 import { echoesUserShell, liveThinkingShows, movedInPlace, sessionEvent, textShows } from "./rules"
 
@@ -475,11 +475,13 @@ function turnRows(
   // segment so none of those rows cross it.
   const appendAssistantSegment = (messages: SessionMessageAssistant[]) => {
     const refs = messages.flatMap((message, messageIndex) =>
-      contentEntries(message)
-        .filter(
-          (entry) => isVisible(entry.content) && !(thinking?.messageID === message.id && thinking.partID === entry.id),
-        )
-        .map((entry) => ({ messageID: message.id, messageIndex, partID: entry.id, content: entry.content })),
+      contentEntries(message).flatMap((entry) => [
+        ...(isVisible(entry.content) && !(thinking?.messageID === message.id && thinking.partID === entry.id)
+          ? [{ messageID: message.id, messageIndex, partID: entry.id, content: entry.content }]
+          : []),
+        // A script's changed files follow it, placed by the Edits setting even where the script itself hides.
+        ...scriptFileItems(message.id, messageIndex, entry.content, detail),
+      ]),
     )
 
     const interruptedAt = messages.findIndex((message) => isInterruptedError(message.error))

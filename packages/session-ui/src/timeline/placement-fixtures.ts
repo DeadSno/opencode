@@ -117,6 +117,39 @@ export const placementMessages: SessionMessageInfo[] = [
     output: { output: "/repo", cursor: 5, size: 5, truncated: false },
     time: { created: 30, completed: 31 },
   },
+  { id: "msg_u4", type: "user", text: "script edits", time: { created: 40 } },
+  assistant("msg_a5", 41, [
+    storyTool(
+      "exec_files",
+      "execute",
+      "completed",
+      { code: "await edit()" },
+      {
+        metadata: {
+          toolCalls: [],
+          files: [
+            {
+              file: "/repo/merged.ts",
+              status: "modified",
+              additions: 3,
+              deletions: 1,
+              patch: "--- a/repo/merged.ts\n+++ b/repo/merged.ts\n@@ -1 +1,3 @@\n-a\n+b\n+c\n+d\n",
+            },
+            {
+              file: "/repo/created.ts",
+              status: "added",
+              additions: 1,
+              deletions: 0,
+              patch: "--- /dev/null\n+++ b/repo/created.ts\n@@ -0,0 +1 @@\n+new\n",
+            },
+            { file: "/repo/removed.bin", status: "deleted", additions: 0, deletions: 40 },
+          ],
+        },
+      },
+    ),
+    storyTool("patch_2", "patch", "completed", {}, { metadata: { files: [{ file: "/repo/direct.ts" }] } }),
+    text("Script done."),
+  ]),
 ]
 
 const preset = (id: string): TimelineDetail => timelinePresets.find((item) => item.id === id)!.value

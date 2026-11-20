@@ -13,7 +13,7 @@ import { currentContentDefaultOpen, currentToolHasLoadedFiles } from "../message
 import { turnCommentary } from "./commentary"
 import { TimelineRow, type PartGroup, type PartRef, type TimelineRowMap } from "./timeline-row"
 import { timelineNoticeRequired, type TimelineDetail } from "./detail"
-import { placeContent, placeItems, placeNotice } from "./place"
+import { placeContent, placeItems, placeNotice, scriptFileItems } from "./place"
 import {
   IDLE_TURN_PHASE,
   isInterruptedError,
@@ -544,13 +544,14 @@ export namespace Timeline {
     // rendered separately. Notices end a segment so none of those rows cross it.
     const appendAssistantSegment = (messages: SessionMessageAssistant[]) => {
       const refs = messages.flatMap((message, messageIndex) =>
-        contentEntries(message)
-          .filter(
-            (entry) =>
-              isRenderable(entry.content, showReasoning, detail) &&
-              !(thinking?.messageID === message.id && thinking.partID === entry.id),
-          )
-          .map((entry) => ({ messageID: message.id, messageIndex, partID: entry.id, content: entry.content })),
+        contentEntries(message).flatMap((entry) => [
+          ...(isRenderable(entry.content, showReasoning, detail) &&
+          !(thinking?.messageID === message.id && thinking.partID === entry.id)
+            ? [{ messageID: message.id, messageIndex, partID: entry.id, content: entry.content }]
+            : []),
+          // A script's changed files follow it, placed by the Edits setting even where the script itself hides.
+          ...scriptFileItems(message.id, messageIndex, entry.content, detail),
+        ]),
       )
 
       const interruptedAt = messages.findIndex((message) => isInterruptedError(message.error))

@@ -1,6 +1,6 @@
 import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client/promise"
 import { timelineNoticeRequired, type TimelineDetail, type TimelinePlacement } from "./detail"
-import { factsOf, type Fact } from "./facts"
+import { factsOf, scriptFilePartID, scriptFiles, type Fact, type FileFact } from "./facts"
 
 /**
  * Where each fact shows, under the Timeline detail setting: its category, whether it stands alone, joins a group or
@@ -54,18 +54,20 @@ export function place(
 
 /** Places a run of message parts, in order. */
 export function placeItems(
-  items: readonly { messageID: string; partID: string; content: Content }[],
+  items: readonly { messageID: string; partID: string; content: Content; file?: FileFact }[],
   detail: TimelineDetail,
   timeline: TimelineKind,
   commentary: ReadonlySet<Content> = new Set(),
 ) {
-  const facts = factsOf(
-    items.map((item) =>
-      item.content.type === "tool"
-        ? { ...item.content, messageID: item.messageID }
-        : { type: item.content.type, id: item.partID, messageID: item.messageID },
-    ),
-  ).filter((fact) => fact.kind !== "file")
+  const facts = items.map(
+    (item) =>
+      item.file ??
+      factsOf([
+        item.content.type === "tool"
+          ? { ...item.content, messageID: item.messageID }
+          : { type: item.content.type, id: item.partID, messageID: item.messageID },
+      ])[0]!,
+  )
 
   const placed = place(facts, detail, {
     timeline,
@@ -75,6 +77,19 @@ export function placeItems(
   })
 
   return facts.map((fact) => placed.get(fact.id)!)
+}
+
+/** The files a finished script changed, as items of their own right after it, where edits show. */
+export function scriptFileItems(messageID: string, messageIndex: number, content: Content, detail?: TimelineDetail) {
+  if (!detail || detail.edit.placement === "hidden" || content.type !== "tool" || content.name !== "execute") return []
+
+  return scriptFiles(content, messageID).map((file) => ({
+    messageID,
+    messageIndex,
+    partID: scriptFilePartID(content.id, file.path),
+    content,
+    file,
+  }))
 }
 
 /** Places one message part. */
@@ -99,6 +114,18 @@ function placeFact(fact: Fact, detail: TimelineDetail, timeline: TimelineKind, c
     const opens = timeline === "next" ? false : detail.thinking.details === "expanded"
 
     return { category, placement, group: placement === "grouped" ? "context" : "part", opens }
+  }
+
+  // A file a script changed shows as a direct edit's file does, under the Edits setting.
+  if (fact.kind === "file") {
+    const placement = detail.edit.placement
+
+    return {
+      category,
+      placement,
+      group: placement === "grouped" ? "context" : "file",
+      opens: detail.edit.details === "expanded",
+    }
   }
 
   if (fact.kind !== "call" || !category) return { category, placement: "hidden", group: "part" }

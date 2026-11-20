@@ -67,8 +67,12 @@ export type FileFact = {
   status: Tool["state"]["status"]
   additions?: number
   deletions?: number
+  /** How the file changed, and its diff, where the call recorded them. */
+  change?: "added" | "deleted" | "modified"
+  patch?: string
   by: string
-  via: "direct"
+  /** A call that edits files, or a script that changed them as it ran. */
+  via: "direct" | "script"
 }
 
 export type Fact =
@@ -163,7 +167,13 @@ const decodeFile = Schema.decodeUnknownOption(
     file: Schema.String,
     additions: Schema.optional(Schema.Number),
     deletions: Schema.optional(Schema.Number),
+    status: Schema.optional(Schema.Literals(["added", "deleted", "modified"])),
+    patch: Schema.optional(Schema.String),
   }),
+)
+
+const decodeScript = Schema.decodeUnknownOption(
+  Schema.Struct({ background: Schema.optional(Schema.Unknown), jobID: Schema.optional(Schema.Unknown) }),
 )
 
 const decodeFiles = Schema.decodeUnknownOption(Schema.Array(Schema.Unknown))
@@ -211,33 +221,43 @@ function toolFacts(tool: Tool, id: string): Fact[] {
 
   if (details?.matches !== undefined) call.matches = details.matches
 
-  if (mode !== "edit") return [call]
-
   const changed = Option.getOrElse(decodeFiles(metadata.files), () => []).flatMap((file) =>
     Option.toArray(decodeFile(file)),
   )
 
+  // A script reports the files it changed once it finishes in the foreground; one moved to the background has none.
+  if (name === "execute") {
+    const script = Option.getOrUndefined(decodeScript(metadata))
+
+    if (state.status !== "completed" || script?.background === true || script?.jobID !== undefined) return [call]
+
+    return [call, ...changed.map((file) => fileFact(file, id, state.status, "script"))]
+  }
+
+  if (mode !== "edit") return [call]
+
   const files = changed.length ? changed : path ? [{ file: path }] : []
 
-  return [
-    call,
-    ...files.map((file): FileFact => {
-      const fact: FileFact = {
-        kind: "file",
-        id: `${id}:file:${file.file}`,
-        path: file.file,
-        status: state.status,
-        by: id,
-        via: "direct",
-      }
+  return [call, ...files.map((file) => fileFact(file, id, state.status, "direct"))]
+}
 
-      if (file.additions !== undefined) fact.additions = file.additions
+function fileFact(
+  file: { file: string; additions?: number; deletions?: number; status?: FileFact["change"]; patch?: string },
+  by: string,
+  status: Tool["state"]["status"],
+  via: FileFact["via"],
+): FileFact {
+  const fact: FileFact = { kind: "file", id: `${by}:file:${file.file}`, path: file.file, status, by, via }
 
-      if (file.deletions !== undefined) fact.deletions = file.deletions
+  if (file.additions !== undefined) fact.additions = file.additions
 
-      return fact
-    }),
-  ]
+  if (file.deletions !== undefined) fact.deletions = file.deletions
+
+  if (file.status !== undefined) fact.change = file.status
+
+  if (file.patch !== undefined) fact.patch = file.patch
+
+  return fact
 }
 
 // How a call that launches background work ended. Older sessions marked a foreground subagent's result as completed.
@@ -376,4 +396,32 @@ function shells(facts: readonly Fact[]) {
     verbs: Array.from(counts, ([verb, count]) => ({ verb, count })),
     failed: list.filter((outcome) => outcome.failed).length,
   }
+}
+
+/** Where a script's changed file stands in a message: its part id is the script's, then the file's path. */
+export function scriptFilePartID(scriptID: string, path: string) {
+  return `${scriptID}:file:${path}`
+}
+
+/** The file a script changed that a part id names, read from the script's part in the message. */
+export function scriptFileFact(content: readonly Content[], messageID: string, partID: string) {
+  const at = partID.indexOf(":file:")
+
+  if (at < 0) return undefined
+  const scriptID = partID.slice(0, at)
+  const tool = content.find((item) => item.type === "tool" && item.id === scriptID)
+
+  if (tool?.type !== "tool") return undefined
+  const id = `${messageID}:${partID}`
+
+  return factsOf([{ ...tool, messageID }]).find(
+    (fact): fact is FileFact => fact.kind === "file" && fact.via === "script" && fact.id === id,
+  )
+}
+
+/** The files a script part changed, as facts. */
+export function scriptFiles(tool: Tool, messageID: string) {
+  return factsOf([{ ...tool, messageID }]).filter(
+    (fact): fact is FileFact => fact.kind === "file" && fact.via === "script",
+  )
 }
